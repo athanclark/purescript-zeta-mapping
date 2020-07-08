@@ -2,8 +2,9 @@ module IxZeta.Map where
 
 import Prelude
 import Data.Maybe (Maybe (..))
-import Data.Tuple (Tuple)
+import Data.Tuple (Tuple (..))
 import Data.Profunctor.Strong (first)
+import Data.Generic.Rep (class Generic)
 import Effect (Effect)
 import Effect.Ref (Ref)
 import Effect.Ref (new, read, write) as Ref
@@ -20,6 +21,21 @@ data MapUpdate key value
   = MapInsert { key :: key, valueNew :: value }
   | MapUpdate { key :: key, valueOld :: value, valueNew :: value }
   | MapDelete { key :: key, valueOld :: value }
+
+derive instance genericMapUpdate :: (Generic key key', Generic value value') => Generic (MapUpdate key value) _
+
+instance eqMapUpdate :: (Eq key, Eq value) => Eq (MapUpdate key value) where
+  eq x y = case Tuple x y of
+    Tuple (MapInsert x') (MapInsert y') -> x'.key == y'.key && x'.valueNew == y'.valueNew
+    Tuple (MapUpdate x') (MapUpdate y') -> x'.key == y'.key && x'.valueNew == y'.valueNew && x'.valueOld == y'.valueOld
+    Tuple (MapDelete x') (MapDelete y') -> x'.key == y'.key && x'.valueOld == y'.valueOld
+    _ -> false
+
+instance showMapUpdate :: (Show key, Show value) => Show (MapUpdate key value) where
+  show x = case x of
+    MapInsert {key,valueNew} -> "(MapInsert {key: " <> show key <> ", valueNew: " <> show valueNew <> "})"
+    MapUpdate {key,valueNew,valueOld} -> "(MapUpdate {key: " <> show key <> ", valueOld: " <> show valueOld <> ", valueNew: " <> show valueNew <> "})"
+    MapDelete {key,valueOld} -> "(MapDelete {key: " <> show key <> ", valueOld: " <> show valueOld <> "})"
 
 newtype IxSignalMap key ( rw :: # S.SCOPE ) value = IxSignalMap
   { fromString :: String -> key
