@@ -10,7 +10,7 @@ import Effect.Ref (new, read, write) as Ref
 import IxQueue (IxQueue)
 import IxQueue (broadcast, new, on, del) as IxQueue
 import Queue.Types (READ, WRITE) as Q
-import Zeta.Types (READ, WRITE, kind SCOPE) as S
+import Zeta.Types (READ, WRITE, kind SCOPE, class SignalScope) as S
 import Foreign.Object (Object)
 import Foreign.Object (empty, lookup, delete, insert, toUnfoldable) as Object
 
@@ -27,6 +27,12 @@ newtype IxSignalMap key ( rw :: # S.SCOPE ) value = IxSignalMap
   , state :: Ref (Object value)
   , queue :: IxQueue (read :: Q.READ, write :: Q.WRITE) (MapUpdate key value)
   }
+
+instance signalScopeIxSignalMap :: S.SignalScope (IxSignalMap key) where
+  readOnly (IxSignalMap x) = IxSignalMap x
+  writeOnly (IxSignalMap x) = IxSignalMap x
+  allowReading (IxSignalMap x) = IxSignalMap x
+  allowWriting (IxSignalMap x) = IxSignalMap x
 
 new :: forall key value. { fromString :: String -> key, toString :: key -> String } -> Effect (IxSignalMap key (read :: S.READ, write :: S.WRITE) value)
 new {fromString, toString} = do
