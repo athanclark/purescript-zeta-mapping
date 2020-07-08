@@ -69,6 +69,7 @@ getAll :: forall key value rw. IxSignalMap key (read :: S.READ | rw) value -> Ef
 getAll (IxSignalMap {fromString, state}) = do
   (map (first fromString) <<< Object.toUnfoldable) <$> Ref.read state
 
+-- | Updates when already existing
 set :: forall key value rw. key -> value -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Unit
 set key value (IxSignalMap {toString, state, queue}) = do
   state' <- Ref.read state
@@ -78,6 +79,18 @@ set key value (IxSignalMap {toString, state, queue}) = do
         Nothing -> MapInsert {key, valueNew: value}
         Just valueOld -> MapUpdate {key, valueOld, valueNew: value}
   IxQueue.broadcast queue up
+
+-- | Only inserts, does not update
+set' :: forall key value rw. key -> value -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Boolean
+set' key value (IxSignalMap {toString, state, queue}) = do
+  state' <- Ref.read state
+  let k = toString key
+  case Object.lookup k state' of
+    Just _ -> pure false
+    Nothing -> do
+      Ref.write (Object.insert k value state') state
+      IxQueue.broadcast queue (MapInsert {key, valueNew: value})
+      pure true
 
 update :: forall key value rw. key -> (value -> value) -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Unit
 update key f (IxSignalMap {toString, state, queue}) = do
