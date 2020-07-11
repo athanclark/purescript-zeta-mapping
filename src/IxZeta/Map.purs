@@ -9,7 +9,7 @@ import Effect (Effect)
 import Effect.Ref (Ref)
 import Effect.Ref (new, read, write) as Ref
 import IxQueue (IxQueue)
-import IxQueue (broadcast, new, on, del) as IxQueue
+import IxQueue (broadcast, broadcastExcept, new, on, del) as IxQueue
 import Queue.Types (READ, WRITE) as Q
 import Zeta.Types (READ, WRITE, kind SCOPE, class SignalScope) as S
 import Foreign.Object (Object)
@@ -70,8 +70,8 @@ getAll (IxSignalMap {fromString, state}) = do
   (map (first fromString) <<< Object.toUnfoldable) <$> Ref.read state
 
 -- | Updates when already existing
-set :: forall key value rw. key -> value -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Unit
-set key value (IxSignalMap {toString, state, queue}) = do
+assign :: forall key value rw. key -> value -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Unit
+assign key value (IxSignalMap {toString, state, queue}) = do
   state' <- Ref.read state
   let k = toString key
   Ref.write (Object.insert k value state') state
@@ -80,9 +80,19 @@ set key value (IxSignalMap {toString, state, queue}) = do
         Just valueOld -> MapUpdate {key, valueOld, valueNew: value}
   IxQueue.broadcast queue up
 
--- | Only inserts, does not update
-set' :: forall key value rw. key -> value -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Boolean
-set' key value (IxSignalMap {toString, state, queue}) = do
+assignExcept :: forall key value rw. Array String -> key -> value -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Unit
+assignExcept indicies key value (IxSignalMap {toString, state, queue}) = do
+  state' <- Ref.read state
+  let k = toString key
+  Ref.write (Object.insert k value state') state
+  let up = case Object.lookup k state' of
+        Nothing -> MapInsert {key, valueNew: value}
+        Just valueOld -> MapUpdate {key, valueOld, valueNew: value}
+  IxQueue.broadcastExcept queue indicies up
+
+-- | Only inserts, does not update existing values
+insert :: forall key value rw. key -> value -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Boolean
+insert key value (IxSignalMap {toString, state, queue}) = do
   state' <- Ref.read state
   let k = toString key
   case Object.lookup k state' of
@@ -92,26 +102,62 @@ set' key value (IxSignalMap {toString, state, queue}) = do
       IxQueue.broadcast queue (MapInsert {key, valueNew: value})
       pure true
 
-update :: forall key value rw. key -> (value -> value) -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Unit
+insertExcept :: forall key value rw. Array String -> key -> value -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Boolean
+insertExcept indicies key value (IxSignalMap {toString, state, queue}) = do
+  state' <- Ref.read state
+  let k = toString key
+  case Object.lookup k state' of
+    Just _ -> pure false
+    Nothing -> do
+      Ref.write (Object.insert k value state') state
+      IxQueue.broadcastExcept queue indicies (MapInsert {key, valueNew: value})
+      pure true
+
+update :: forall key value rw. key -> (value -> value) -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Boolean
 update key f (IxSignalMap {toString, state, queue}) = do
   state' <- Ref.read state
   let k = toString key
   case Object.lookup k state' of
-    Nothing -> pure unit
+    Nothing -> pure false
     Just valueOld -> do
       let valueNew = f valueOld
       Ref.write (Object.insert k valueNew state') state
       IxQueue.broadcast queue (MapUpdate {key, valueOld, valueNew})
+      pure true
 
-delete :: forall key value rw. key -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Unit
+updateExcept :: forall key value rw. Array String -> key -> (value -> value) -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Boolean
+updateExcept indicies key f (IxSignalMap {toString, state, queue}) = do
+  state' <- Ref.read state
+  let k = toString key
+  case Object.lookup k state' of
+    Nothing -> pure false
+    Just valueOld -> do
+      let valueNew = f valueOld
+      Ref.write (Object.insert k valueNew state') state
+      IxQueue.broadcastExcept queue indicies (MapUpdate {key, valueOld, valueNew})
+      pure true
+
+delete :: forall key value rw. key -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Boolean
 delete key (IxSignalMap {toString, state, queue}) = do
   state' <- Ref.read state
   let k = toString key
   case Object.lookup k state' of
-    Nothing -> pure unit
+    Nothing -> pure false
     Just valueOld -> do
       Ref.write (Object.delete k state') state
       IxQueue.broadcast queue (MapDelete {key, valueOld})
+      pure true
+
+deleteExcept :: forall key value rw. Array String -> key -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Boolean
+deleteExcept indicies key (IxSignalMap {toString, state, queue}) = do
+  state' <- Ref.read state
+  let k = toString key
+  case Object.lookup k state' of
+    Nothing -> pure false
+    Just valueOld -> do
+      Ref.write (Object.delete k state') state
+      IxQueue.broadcastExcept queue indicies (MapDelete {key, valueOld})
+      pure true
 
 subscribeLight :: forall key value rw. String -> (MapUpdate key value -> Effect Unit) -> IxSignalMap key (read :: S.READ | rw) value -> Effect Unit
 subscribeLight index f (IxSignalMap {queue}) = IxQueue.on queue index f
