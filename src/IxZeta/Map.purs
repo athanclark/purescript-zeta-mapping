@@ -17,31 +17,31 @@ import Foreign.Object (empty, lookup, delete, insert, toUnfoldable) as Object
 
 
 -- | Represents only atomic changes to a mapping
-data MapUpdate key value
-  = MapInsert { key :: key, valueNew :: value }
-  | MapUpdate { key :: key, valueOld :: value, valueNew :: value }
-  | MapDelete { key :: key, valueOld :: value }
+data MapUpdate value
+  = MapInsert { valueNew :: value }
+  | MapUpdate { valueOld :: value, valueNew :: value }
+  | MapDelete { valueOld :: value }
 
-derive instance genericMapUpdate :: (Generic key key', Generic value value') => Generic (MapUpdate key value) _
+derive instance genericMapUpdate :: (Generic value value') => Generic (MapUpdate value) _
 
-instance eqMapUpdate :: (Eq key, Eq value) => Eq (MapUpdate key value) where
+instance eqMapUpdate :: (Eq value) => Eq (MapUpdate value) where
   eq x y = case Tuple x y of
-    Tuple (MapInsert x') (MapInsert y') -> x'.key == y'.key && x'.valueNew == y'.valueNew
-    Tuple (MapUpdate x') (MapUpdate y') -> x'.key == y'.key && x'.valueNew == y'.valueNew && x'.valueOld == y'.valueOld
-    Tuple (MapDelete x') (MapDelete y') -> x'.key == y'.key && x'.valueOld == y'.valueOld
+    Tuple (MapInsert x') (MapInsert y') -> x'.valueNew == y'.valueNew
+    Tuple (MapUpdate x') (MapUpdate y') -> x'.valueNew == y'.valueNew && x'.valueOld == y'.valueOld
+    Tuple (MapDelete x') (MapDelete y') -> x'.valueOld == y'.valueOld
     _ -> false
 
-instance showMapUpdate :: (Show key, Show value) => Show (MapUpdate key value) where
+instance showMapUpdate :: (Show value) => Show (MapUpdate value) where
   show x = case x of
-    MapInsert {key,valueNew} -> "(MapInsert {key: " <> show key <> ", valueNew: " <> show valueNew <> "})"
-    MapUpdate {key,valueNew,valueOld} -> "(MapUpdate {key: " <> show key <> ", valueOld: " <> show valueOld <> ", valueNew: " <> show valueNew <> "})"
-    MapDelete {key,valueOld} -> "(MapDelete {key: " <> show key <> ", valueOld: " <> show valueOld <> "})"
+    MapInsert {valueNew} -> "(MapInsert {alueNew: " <> show valueNew <> "})"
+    MapUpdate {valueNew,valueOld} -> "(MapUpdate {valueOld: " <> show valueOld <> ", valueNew: " <> show valueNew <> "})"
+    MapDelete {valueOld} -> "(MapDelete {valueOld: " <> show valueOld <> "})"
 
 newtype IxSignalMap key ( rw :: # S.SCOPE ) value = IxSignalMap
   { fromString :: String -> key
   , toString :: key -> String
   , state :: Ref (Object value)
-  , queue :: IxQueue (read :: Q.READ, write :: Q.WRITE) (MapUpdate key value)
+  , queue :: IxQueue (read :: Q.READ, write :: Q.WRITE) (Tuple key (MapUpdate value))
   }
 
 instance signalScopeIxSignalMap :: S.SignalScope (IxSignalMap key) where
@@ -76,8 +76,8 @@ assign key value (IxSignalMap {toString, state, queue}) = do
   let k = toString key
   Ref.write (Object.insert k value state') state
   let up = case Object.lookup k state' of
-        Nothing -> MapInsert {key, valueNew: value}
-        Just valueOld -> MapUpdate {key, valueOld, valueNew: value}
+        Nothing -> Tuple key (MapInsert {valueNew: value})
+        Just valueOld -> Tuple key (MapUpdate {valueOld, valueNew: value})
   IxQueue.broadcast queue up
 
 assignExcept :: forall key value rw. Array String -> key -> value -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Unit
@@ -86,8 +86,8 @@ assignExcept indicies key value (IxSignalMap {toString, state, queue}) = do
   let k = toString key
   Ref.write (Object.insert k value state') state
   let up = case Object.lookup k state' of
-        Nothing -> MapInsert {key, valueNew: value}
-        Just valueOld -> MapUpdate {key, valueOld, valueNew: value}
+        Nothing -> Tuple key (MapInsert {valueNew: value})
+        Just valueOld -> Tuple key (MapUpdate {valueOld, valueNew: value})
   IxQueue.broadcastExcept queue indicies up
 
 -- | Only inserts, does not update existing values
@@ -99,7 +99,7 @@ insert key value (IxSignalMap {toString, state, queue}) = do
     Just _ -> pure false
     Nothing -> do
       Ref.write (Object.insert k value state') state
-      IxQueue.broadcast queue (MapInsert {key, valueNew: value})
+      IxQueue.broadcast queue (Tuple key (MapInsert {valueNew: value}))
       pure true
 
 insertExcept :: forall key value rw. Array String -> key -> value -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Boolean
@@ -110,7 +110,7 @@ insertExcept indicies key value (IxSignalMap {toString, state, queue}) = do
     Just _ -> pure false
     Nothing -> do
       Ref.write (Object.insert k value state') state
-      IxQueue.broadcastExcept queue indicies (MapInsert {key, valueNew: value})
+      IxQueue.broadcastExcept queue indicies (Tuple key (MapInsert {valueNew: value}))
       pure true
 
 update :: forall key value rw. key -> (value -> value) -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Boolean
@@ -122,7 +122,7 @@ update key f (IxSignalMap {toString, state, queue}) = do
     Just valueOld -> do
       let valueNew = f valueOld
       Ref.write (Object.insert k valueNew state') state
-      IxQueue.broadcast queue (MapUpdate {key, valueOld, valueNew})
+      IxQueue.broadcast queue (Tuple key (MapUpdate {valueOld, valueNew}))
       pure true
 
 updateExcept :: forall key value rw. Array String -> key -> (value -> value) -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Boolean
@@ -134,7 +134,7 @@ updateExcept indicies key f (IxSignalMap {toString, state, queue}) = do
     Just valueOld -> do
       let valueNew = f valueOld
       Ref.write (Object.insert k valueNew state') state
-      IxQueue.broadcastExcept queue indicies (MapUpdate {key, valueOld, valueNew})
+      IxQueue.broadcastExcept queue indicies (Tuple key (MapUpdate {valueOld, valueNew}))
       pure true
 
 delete :: forall key value rw. key -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Boolean
@@ -145,7 +145,7 @@ delete key (IxSignalMap {toString, state, queue}) = do
     Nothing -> pure false
     Just valueOld -> do
       Ref.write (Object.delete k state') state
-      IxQueue.broadcast queue (MapDelete {key, valueOld})
+      IxQueue.broadcast queue (Tuple key (MapDelete {valueOld}))
       pure true
 
 deleteExcept :: forall key value rw. Array String -> key -> IxSignalMap key (write :: S.WRITE | rw) value -> Effect Boolean
@@ -156,10 +156,10 @@ deleteExcept indicies key (IxSignalMap {toString, state, queue}) = do
     Nothing -> pure false
     Just valueOld -> do
       Ref.write (Object.delete k state') state
-      IxQueue.broadcastExcept queue indicies (MapDelete {key, valueOld})
+      IxQueue.broadcastExcept queue indicies (Tuple key (MapDelete {valueOld}))
       pure true
 
-subscribeLight :: forall key value rw. String -> (MapUpdate key value -> Effect Unit) -> IxSignalMap key (read :: S.READ | rw) value -> Effect Unit
+subscribeLight :: forall key value rw. String -> (Tuple key (MapUpdate value) -> Effect Unit) -> IxSignalMap key (read :: S.READ | rw) value -> Effect Unit
 subscribeLight index f (IxSignalMap {queue}) = IxQueue.on queue index f
 
 unsubscribe :: forall key value rw. String -> IxSignalMap key (read :: S.READ | rw) value -> Effect Boolean
